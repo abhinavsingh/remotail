@@ -53,15 +53,15 @@ class UI(object):
     """
     
     palette = [
-        ('title', 'black,bold', 'dark green',),
-        ('header', 'black', 'dark green',),
-        ('footer','white', 'dark blue',),
+        ('outer-title', 'black,bold', 'dark green',),
+        ('outer-header', 'black', 'dark green',),
+        ('outer-footer','white', 'dark blue',),
         ('key', 'white,bold', 'dark blue',),
+        ('inner-title', 'black,bold', 'dark cyan',),
+        ('inner-header', 'black', 'dark cyan',),
     ]
     
-    header_text = [
-        ('title', 'Remotail v%s' % __version__,),
-    ]
+    header_text = [('outer-title', 'Remotail v%s' % __version__,),]
     
     footer_text = [
         ('key', "UP"), ", ",
@@ -75,13 +75,15 @@ class UI(object):
     
     def __init__(self):
         self.columns = urwid.Columns([])
-        self.header = urwid.AttrMap(urwid.Text(self.header_text), 'header')
-        self.footer = urwid.AttrMap(urwid.Text(self.footer_text), 'footer')
+        self.header = urwid.AttrMap(urwid.Text(self.header_text, align='center'), 'outer-header')
+        self.footer = urwid.AttrMap(urwid.Text(self.footer_text), 'outer-footer')
         self.frame = urwid.Frame(self.columns, header=self.header, footer=self.footer)
         self.loop = urwid.MainLoop(self.frame, self.palette, unhandled_input=self.unhandled_input)
     
     def add_column(self, alias):
-        self.boxes[alias] = urwid.ListBox(urwid.SimpleListWalker([]))
+        header = urwid.AttrMap(urwid.Text([('inner-title', alias,),]), 'inner-header')
+        listbox = urwid.ListBox(urwid.SimpleListWalker([]))
+        self.boxes[alias] = urwid.Frame(listbox, header=header)
         self.columns.contents.append((self.boxes[alias], self.columns.options()))
     
     def unhandled_input(self, key):
@@ -154,7 +156,7 @@ class Remotail(object):
     def display(self):
         line = self.queue.get_nowait()
         text = urwid.Text(line['data'].strip())
-        box = self.ui.boxes[line['alias']]
+        box = self.ui.boxes[line['alias']].body
         box.body.append(text)
         box.set_focus(len(box.body)-1)
     
