@@ -33,6 +33,25 @@ logger = logging.getLogger('remotail')
 
 class UI(object):
     
+    """Console UI for showing captured logs.
+    
+    -------------------frame-------------------------
+    | header                                        |
+    |         ---------------columns--------------  |
+    |         | ----------frame----------        |  |
+    |         | | header                |        |  |
+    |         | |        ---listbox---  |        |  |
+    |         | |        |           |  |        |  |
+    | body    | | body   |           |  |  ....  |  |
+    |         | |        |           |  |        |  |
+    |         | |        -------------  |        |  |
+    |         | | footer                |        |  |
+    |         | -------------------------        |  |
+    |         ------------------------------------  |
+    | footer                                        |
+    -------------------------------------------------
+    """
+    
     palette = [
         ('title', 'black,bold', 'dark green',),
         ('header', 'black', 'dark green',),
@@ -41,7 +60,7 @@ class UI(object):
     ]
     
     header_text = [
-        ('title', 'Remotail v0.0.1',),
+        ('title', 'Remotail v%s' % __version__,),
     ]
     
     footer_text = [
@@ -61,9 +80,9 @@ class UI(object):
         self.frame = urwid.Frame(self.columns, header=self.header, footer=self.footer)
         self.loop = urwid.MainLoop(self.frame, self.palette, unhandled_input=self.unhandled_input)
     
-    def add_box(self, key):
-        self.boxes[key] = urwid.ListBox(urwid.SimpleListWalker([]))
-        self.columns.contents.append((self.boxes[key], self.columns.options()))
+    def add_column(self, alias):
+        self.boxes[alias] = urwid.ListBox(urwid.SimpleListWalker([]))
+        self.columns.contents.append((self.boxes[alias], self.columns.options()))
     
     def unhandled_input(self, key):
         if key.lower() == 'q':
@@ -119,7 +138,7 @@ class Remotail(object):
             proc = multiprocessing.Process(target=Remotail.tail, args=(self.filepaths[alias], self.queue,))
             self.procs.append(proc)
             proc.start()
-            self.ui.add_box(self.filepaths[alias]['alias'])
+            self.ui.add_column(self.filepaths[alias]['alias'])
         
         self.ui.loop.watch_file(self.queue._reader, self.display)
         
@@ -134,7 +153,10 @@ class Remotail(object):
     
     def display(self):
         line = self.queue.get_nowait()
-        self.ui.boxes[line['alias']].body.append(urwid.Text(line['data'].strip()))
+        text = urwid.Text(line['data'].strip())
+        box = self.ui.boxes[line['alias']]
+        box.body.append(text)
+        box.set_focus(len(box.body)-1)
     
     @staticmethod
     def tail(filepath, queue):
