@@ -31,6 +31,21 @@ import logging
 logging.basicConfig(level=logging.INFO, filename="/tmp/remotail.log")
 logger = logging.getLogger('remotail')
 
+class Cols(urwid.Columns):
+    
+    def __init__(self, *args, **kwargs):
+        super(Cols, self).__init__(*args, **kwargs)
+    
+    def keypress(self, size, key):
+        super(Cols, self).keypress(size, key)
+        
+        if key in ('right', 'tab'):
+            self.focus_position = self.focus_position + 1 if self.focus_position < len(self.contents) - 1 else 0
+        elif key == 'left':
+            self.focus_position = self.focus_position - 1 if self.focus_position > 0 else len(self.contents) - 1
+        else:
+            return key
+
 class UI(object):
     
     """Console UI for showing captured logs.
@@ -74,7 +89,7 @@ class UI(object):
     boxes = dict()
     
     def __init__(self):
-        self.columns = urwid.Columns([])
+        self.columns = Cols([])
         self.header = urwid.AttrMap(urwid.Text(self.header_text, align='center'), 'outer-header')
         self.footer = urwid.AttrMap(urwid.Text(self.footer_text), 'outer-footer')
         self.frame = urwid.Frame(self.columns, header=self.header, footer=self.footer)
@@ -89,28 +104,70 @@ class UI(object):
     def unhandled_input(self, key):
         if key.lower() == 'q':
             raise urwid.ExitMainLoop()
-        elif key in ('right', 'tab'):
-            self.columns.focus_position = self.columns.focus_position + 1 if self.columns.focus_position < len(self.columns.contents) - 1 else 0
-        elif key == 'left':
-            self.columns.focus_position = self.columns.focus_position - 1 if self.columns.focus_position > 0 else len(self.columns.contents) - 1
 
 class Channel(object):
     
     def __init__(self, filepath):
         self.filepath = filepath
+        self.connected = False
     
     def __enter__(self):
-        self.client = paramiko.SSHClient()
-        self.client.load_system_host_keys()
-        self.client.set_missing_host_key_policy(paramiko.WarningPolicy())
-        self.client.connect(self.filepath['host'], self.filepath['port'], self.filepath['username'], self.filepath['password'])
-        self.transport = self.client.get_transport()
-        self.channel = self.transport.open_session()
-        return self.channel
+        try:
+            self.client = paramiko.SSHClient()
+            self.client.load_system_host_keys()
+            self.client.set_missing_host_key_policy(paramiko.WarningPolicy())
+            self.client.connect(self.filepath['host'], self.filepath['port'], self.filepath['username'], self.filepath['password'])
+            self.transport = self.client.get_transport()
+            self.channel = self.transport.open_session()
+            self.connected = True
+            return self.channel
+        except Exception as e:
+            return e
     
     def __exit__(self, type, value, traceback):
-        self.client.close()
-        self.channel.close()
+        if self.connected:
+            self.client.close()
+            self.channel.close()
+
+class Tail(multiprocessing.Process):
+    
+    def __init__(self, filepath, queue):
+        super(Tail, self).__init__()
+        self.filepath = filepath
+        self.queue = queue
+    
+    def run(self):
+        with Channel(self.filepath) as channel:
+            if isinstance(channel, Exception):
+                self.put(str(channel))
+            else:
+                channel.exec_command('tail -f %s' % self.filepath['path'])
+                try:
+                    while True:
+                        if channel.exit_status_ready():
+                            self.put('channel exit status ready')
+                            break
+                        
+                        r, w, e = select.select([channel], [], [])
+                        if channel in r:
+                            try:
+                                data = channel.recv(1024)
+                                if len(data) == 0:
+                                    self.put("EOF")
+                                    break
+                                self.put(data)
+                            except socket.timeout as e:
+                                self.put(str(e))
+                except KeyboardInterrupt as e:
+                    pass
+                except Exception as e:
+                    self.put(str(e))
+    
+    def put(self, data):
+        self.queue.put(dict(
+            alias = self.filepath['alias'],
+            data = data
+        ))
 
 class Remotail(object):
     
@@ -137,7 +194,7 @@ class Remotail(object):
     
     def start(self):
         for alias in self.filepaths:
-            proc = multiprocessing.Process(target=Remotail.tail, args=(self.filepaths[alias], self.queue,))
+            proc = Tail(self.filepaths[alias], self.queue)
             self.procs.append(proc)
             proc.start()
             self.ui.add_column(self.filepaths[alias]['alias'])
@@ -159,32 +216,6 @@ class Remotail(object):
         box = self.ui.boxes[line['alias']].body
         box.body.append(text)
         box.set_focus(len(box.body)-1)
-    
-    @staticmethod
-    def tail(filepath, queue):
-        with Channel(filepath) as channel:
-            channel.exec_command('tail -f %s' % filepath['path'])
-            try:
-                while True:
-                    if channel.exit_status_ready():
-                        logger.info('channel exit status ready')
-                        break
-                    
-                    r, w, e = select.select([channel], [], [])
-                    if channel in r:
-                        try:
-                            data = channel.recv(1024)
-                            if len(data) == 0:
-                                logger.info("EOF for %s" % filepath['alias'])
-                                break
-                            queue.put(dict(alias=filepath['alias'], data=data))
-                        except socket.timeout as e:
-                            logger.info(e)
-                            pass
-            except KeyboardInterrupt as e:
-                pass
-            except Exception as e:
-                logger.info(e)
 
 def main():
     parser = argparse.ArgumentParser()
