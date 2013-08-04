@@ -175,13 +175,14 @@ class Remotail(object):
         self.queue = multiprocessing.Queue()
         self.procs = list()
         self.ui = UI()
-        
         self.filepaths = dict()
+        
         for filepath in filepaths:
             filepath = self.filepath_to_dict(filepath)
             self.filepaths[filepath['alias']] = filepath
     
-    def filepath_to_dict(self, filepath):
+    @staticmethod
+    def filepath_to_dict(filepath):
         url = urlparse.urlparse(filepath)
         return dict(
             username = url.username if url.username else getpass.getuser(),
@@ -218,12 +219,24 @@ class Remotail(object):
         box.set_focus(len(box.body)-1)
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description='Remotail v%s' % __version__,
+        epilog='Having difficulty using Remotail? Report at: %s/issues/new' % __homepage__
+    )
     parser.add_argument('--file-path', default=list(), action='append', help='alias://user:pass@host:port/file/path/to/tail')
+    parser.add_argument('--config', help='Config file containing one --file-path per line')
     args = parser.parse_args()
     
+    filepaths = args.file_path
+    
+    if args.config:
+        try:
+            filepaths += open(args.config, 'rb').read().strip().split()
+        except IOError as e:
+            logger.error(e)
+    
     try:
-        Remotail(args.file_path).start()
+        Remotail(filepaths).start()
     except KeyboardInterrupt as e:
         pass
 
