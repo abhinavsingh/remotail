@@ -31,13 +31,12 @@ import logging
 logging.basicConfig(level=logging.INFO, filename="/tmp/remotail.log")
 logger = logging.getLogger('remotail')
 
-class Cols(urwid.Columns):
-    
-    def __init__(self, *args, **kwargs):
-        super(Cols, self).__init__(*args, **kwargs)
+remotail = None
+
+class Container(urwid.Columns):
     
     def keypress(self, size, key):
-        super(Cols, self).keypress(size, key)
+        key = super(Container, self).keypress(size, key)
         
         if key in ('right', 'tab'):
             self.focus_position = self.focus_position + 1 if self.focus_position < len(self.contents) - 1 else 0
@@ -45,6 +44,29 @@ class Cols(urwid.Columns):
             self.focus_position = self.focus_position - 1 if self.focus_position > 0 else len(self.contents) - 1
         else:
             return key
+
+class CommandLine(urwid.Edit):
+    
+    _allowed_cmds = ['enable', 'disable']
+    
+    def keypress(self, size, key):
+        key = super(CommandLine, self).keypress(size, key)
+        
+        if key == 'enter':
+            self._execute(self.get_edit_text())
+            self.set_edit_text('')
+        else:
+            return key
+    
+    def _execute(self, input):
+        args = input.split()
+        if args[0] in self._allowed_cmds:
+            if args[0] == 'enable':
+                remotail.enable(args[1])
+            elif args[0] == 'disable':
+                remotail.disable(args[1])
+        else:
+            logger.error('%s command not found' % args[0])
 
 class UI(object):
     
@@ -68,42 +90,41 @@ class UI(object):
     """
     
     palette = [
-        ('outer-title', 'black,bold', 'dark green',),
-        ('outer-header', 'black', 'dark green',),
-        ('outer-footer','white', 'dark blue',),
-        ('key', 'white,bold', 'dark blue',),
-        ('inner-title', 'black,bold', 'dark cyan',),
-        ('inner-header', 'black', 'dark cyan',),
+        ('outer-title', 'white,bold', 'dark blue',),
+        ('outer-header', 'white', 'dark blue',),
+        ('outer-footer','black', 'dark cyan',),
+        ('outer-footer-text', 'black,bold', 'dark cyan',),
+        ('inner-title', 'black,bold', 'dark green',),
+        ('inner-header', 'black', 'dark green',),
     ]
     
     header_text = [('outer-title', 'Remotail v%s' % __version__,),]
     
     footer_text = [
-        ('key', "UP"), ", ",
-        ('key', "DOWN"), ", ",
-        ('key', "PAGE UP"), " and ",
-        ('key', "PAGE DOWN"), " more view ",
-        ('key', "Q"), " exits",
+        ('outer-footer-text', '> ')
     ]
     
     boxes = dict()
     
     def __init__(self):
-        self.columns = Cols([])
+        self.columns = Container([])
         self.header = urwid.AttrMap(urwid.Text(self.header_text, align='center'), 'outer-header')
-        self.footer = urwid.AttrMap(urwid.Text(self.footer_text), 'outer-footer')
+        self.footer = urwid.AttrMap(CommandLine(self.footer_text), 'outer-footer')
+        
         self.frame = urwid.Frame(self.columns, header=self.header, footer=self.footer)
-        self.loop = urwid.MainLoop(self.frame, self.palette, unhandled_input=self.unhandled_input)
+        self.frame.set_focus('footer')
+        
+        self.loop = urwid.MainLoop(self.frame, self.palette)
     
     def add_column(self, alias):
         header = urwid.AttrMap(urwid.Text([('inner-title', alias,),]), 'inner-header')
         listbox = urwid.ListBox(urwid.SimpleListWalker([]))
-        self.boxes[alias] = urwid.Frame(listbox, header=header)
-        self.columns.contents.append((self.boxes[alias], self.columns.options()))
+        self.boxes[alias] = (urwid.Frame(listbox, header=header), self.columns.options())
+        self.columns.contents.append(self.boxes[alias])
     
-    def unhandled_input(self, key):
-        if key.lower() == 'q':
-            raise urwid.ExitMainLoop()
+    def del_column(self, alias):
+        self.columns.contents.remove(self.boxes[alias])
+        del self.boxes[alias]
 
 class Channel(object):
     
@@ -133,7 +154,7 @@ class Tail(multiprocessing.Process):
     
     def __init__(self, filepath, queue):
         super(Tail, self).__init__()
-        self.filepath = filepath
+        self.filepath = Remotail.filepath_to_dict(filepath)
         self.queue = queue
     
     def run(self):
@@ -173,18 +194,19 @@ class Remotail(object):
     
     def __init__(self, filepaths):
         self.queue = multiprocessing.Queue()
-        self.procs = list()
+        self.procs = dict()
         self.ui = UI()
-        self.filepaths = dict()
+        self.filepaths = filepaths
         
-        for filepath in filepaths:
-            filepath = self.filepath_to_dict(filepath)
-            self.filepaths[filepath['alias']] = filepath
+        # ugly hack to get going right now
+        # must be replaced with something better
+        global remotail
+        remotail = self
     
     @staticmethod
     def filepath_to_dict(filepath):
         url = urlparse.urlparse(filepath)
-        return dict(
+        filepath = dict(
             username = url.username if url.username else getpass.getuser(),
             password = url.password,
             host = url.hostname,
@@ -192,13 +214,24 @@ class Remotail(object):
             path = url.path,
             alias = url.scheme
         )
+        assert filepath['alias'] is not ''
+        return filepath
+    
+    def enable(self, filepath):
+        proc = Tail(filepath, self.queue)
+        self.procs[proc.filepath['alias']] = proc
+        self.ui.add_column(proc.filepath['alias'])
+        proc.start()
+    
+    def disable(self, alias):
+        proc = self.procs[alias]
+        del self.procs[alias]
+        proc.terminate()
+        self.ui.del_column(proc.filepath['alias'])
     
     def start(self):
-        for alias in self.filepaths:
-            proc = Tail(self.filepaths[alias], self.queue)
-            self.procs.append(proc)
-            proc.start()
-            self.ui.add_column(self.filepaths[alias]['alias'])
+        for filepath in self.filepaths:
+            self.enable(filepath)
         
         self.ui.loop.watch_file(self.queue._reader, self.display)
         
@@ -207,14 +240,15 @@ class Remotail(object):
         except Exception as e:
             logger.info(e)
         finally:
-            for proc in self.procs:
+            for alias in self.procs:
+                proc = self.procs[alias]
                 proc.terminate()
                 proc.join()
     
     def display(self):
         line = self.queue.get_nowait()
         text = urwid.Text(line['data'].strip())
-        box = self.ui.boxes[line['alias']].body
+        box = self.ui.boxes[line['alias']][0].body
         box.body.append(text)
         box.set_focus(len(box.body)-1)
 
