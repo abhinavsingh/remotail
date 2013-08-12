@@ -13,9 +13,9 @@ fi
 while true; do
 	NOW=$(date)
 	for f in "$@"; do
-    	echo $NOW > $f
-    done
-    sleep 0.5
+		echo $NOW > $f
+	done
+	sleep 0.5
 done
 
 exit 0
