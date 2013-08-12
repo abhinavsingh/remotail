@@ -68,6 +68,17 @@ class CommandLine(urwid.Edit):
         else:
             logger.error('%s command not found' % args[0])
 
+PALETTES = {
+    'default': [
+        ('outer-title', 'white,bold', 'dark blue',),
+        ('outer-header', 'white', 'dark blue',),
+        ('outer-footer','black,bold', 'dark cyan',),
+        ('outer-footer-text', 'black,bold', 'dark cyan',),
+        ('inner-title', 'black,bold', 'dark green',),
+        ('inner-header', 'black', 'dark green',),
+    ],
+}
+
 class UI(object):
     
     """Console UI for showing captured logs.
@@ -89,21 +100,9 @@ class UI(object):
     -------------------------------------------------
     """
     
-    palette = [
-        ('outer-title', 'white,bold', 'dark blue',),
-        ('outer-header', 'white', 'dark blue',),
-        ('outer-footer','black', 'dark cyan',),
-        ('outer-footer-text', 'black,bold', 'dark cyan',),
-        ('inner-title', 'black,bold', 'dark green',),
-        ('inner-header', 'black', 'dark green',),
-    ]
-    
+    palette = PALETTES['default']
     header_text = [('outer-title', 'Remotail v%s' % __version__,),]
-    
-    footer_text = [
-        ('outer-footer-text', '> ')
-    ]
-    
+    footer_text = [('outer-footer-text', '> '),]
     boxes = dict()
     
     def __init__(self):
@@ -150,6 +149,9 @@ class Channel(object):
             self.client.close()
             self.channel.close()
 
+TAIL_MSG_TYPE_DATA = 1
+TAIL_MSG_TYPE_NOTIFY = 2
+
 class Tail(multiprocessing.Process):
     
     def __init__(self, filepath, queue):
@@ -160,13 +162,14 @@ class Tail(multiprocessing.Process):
     def run(self):
         with Channel(self.filepath) as channel:
             if isinstance(channel, Exception):
-                self.put(str(channel))
+                self.put(str(channel), TAIL_MSG_TYPE_NOTIFY)
             else:
+                self.put('connected', TAIL_MSG_TYPE_NOTIFY)
                 channel.exec_command('tail -f %s' % self.filepath['path'])
                 try:
                     while True:
                         if channel.exit_status_ready():
-                            self.put('channel exit status ready')
+                            self.put('channel exit status ready', TAIL_MSG_TYPE_NOTIFY)
                             break
                         
                         r, w, e = select.select([channel], [], [])
@@ -174,20 +177,22 @@ class Tail(multiprocessing.Process):
                             try:
                                 data = channel.recv(1024)
                                 if len(data) == 0:
-                                    self.put("EOF")
+                                    self.put('EOF', TAIL_MSG_TYPE_NOTIFY)
                                     break
                                 self.put(data)
                             except socket.timeout as e:
-                                self.put(str(e))
+                                self.put(str(e), TAIL_MSG_TYPE_NOTIFY)
                 except KeyboardInterrupt as e:
                     pass
                 except Exception as e:
-                    self.put(str(e))
+                    self.put(str(e), TAIL_MSG_TYPE_NOTIFY)
     
-    def put(self, data):
+    def put(self, msg, type=None):
+        type = type if type else TAIL_MSG_TYPE_DATA
         self.queue.put(dict(
             alias = self.filepath['alias'],
-            data = data
+            data = msg,
+            type = type
         ))
 
 class Remotail(object):
@@ -198,8 +203,8 @@ class Remotail(object):
         self.ui = UI()
         self.filepaths = filepaths
         
-        # ugly hack to get going right now
-        # must be replaced with something better
+        # TODO: ugly hack to get going right now
+        # replace with something better
         global remotail
         remotail = self
     
