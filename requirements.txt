@@ -1,2 +1,2 @@
-paramiko==2.0.9
+paramiko==3.4.0
 urwid==1.1.1
